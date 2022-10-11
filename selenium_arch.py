@@ -17,7 +17,6 @@ class BasePage:
         self.driver = driver
     
     def GoTo(self,url):
-        time.sleep(0.1)
         self.driver.get(url)
 
 class BaseElement:
@@ -30,22 +29,18 @@ class BaseElement:
         self.Find()
 
     def Find(self):
-        time.sleep(0.1)     
         self.web_element = WebDriverWait(self.driver, self.timeout).\
                             until(EC.visibility_of_element_located(locator=self.locator))
         print(self.web_element.text)
 
     def Click(self):
-        time.sleep(0.1)
         element = WebDriverWait(self.driver,self.timeout).\
                     until(EC.element_to_be_clickable(locator= self.locator))
     
     def Clear(self):
-        time.sleep(0.1)
         self.web_element.clear()
 
     def ClearManually(self,iter_num):
-        time.sleep(0.1)
         for i in range(iter_num):
             self.web_element.send_keys(Keys.BACK_SPACE)
             self.web_element.send_keys(Keys.BACK_SPACE)
@@ -57,17 +52,14 @@ class BaseElement:
         return attribute
     
     def Enter(self):
-        time.sleep(0.1)
         self.web_element.send_keys(Keys.ENTER)
 
     @property
     def text(self):
-        time.sleep(0.1)
         return self.web_element.text
     
     @text.setter
     def text(self,value):
-        time.sleep(0.1)
         self.web_element.send_keys(value)
 
 Locator = namedtuple('Locator',['by','value'])
