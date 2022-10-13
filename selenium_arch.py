@@ -1,4 +1,5 @@
 from collections import namedtuple
+from re import A
 import traceback,sys,time,os,glob,json
 from pathlib import Path
 from email.mime.text import MIMEText
@@ -21,21 +22,20 @@ class BasePage:
 
 class BaseElement:
 
-    def __init__(self,driver,locator,timeout):
-        self.driver = driver
+    def __init__(self,web_element,locator):
+        self.web_element = web_element
         self.locator = locator
-        self.timeout = timeout
-        self.web_element = None
-        self.Find()
 
-    def Find(self):
-        self.web_element = WebDriverWait(self.driver, self.timeout).\
-                            until(EC.visibility_of_element_located(locator=self.locator))
-        print(self.web_element.text)
+    def __str__(self):
+        return str(self.web_element)
+
+    def ReturnWebElement(self):
+        return self.web_element
 
     def Click(self):
         element = WebDriverWait(self.driver,self.timeout).\
-                    until(EC.element_to_be_clickable(locator= self.locator))
+                    until(EC.element_to_be_clickable(mark= self.locator))
+        element.click()
     
     def Clear(self):
         self.web_element.clear()
@@ -56,56 +56,109 @@ class BaseElement:
 
     @property
     def text(self):
+        if "input" in self.locator.value:
+            return self.web_element.get_attribute('value')
         return self.web_element.text
     
     @text.setter
     def text(self,value):
         self.web_element.send_keys(value)
 
-Locator = namedtuple('Locator',['by','value'])
 
-class BaseElementDescriptor:
+class GetElements:
 
-    def __init__(self,locator, timeout=1):
+    def __init__(self,driver,locator,timeout):
+        self.driver = driver
         self.locator = locator
         self.timeout = timeout
+        self.web_elements = self.driver.find_elements(self.locator.by,self.locator.value)
+    
+    def __len__(self):
+        return len(self.web_elements)
+
+    def __getitem__(self,s):
+        iter_num = len(self.web_elements)
+        if  s < 0 or s >= iter_num:
+            raise IndexError
+        else:
+            return BaseElement(self.web_elements[s],self.locator)
+
+class GetElement(BaseElement):
+    def __init__(self,driver,locator,timeout):        
+        self.driver = driver
+        self.locator = locator
+        self.timeout = timeout
+        self.web_element = WebDriverWait(self.driver, self.timeout).\
+                            until(EC.visibility_of_element_located(locator=self.locator))  
+        BaseElement.__init__(self,self.web_element,self.locator)
+                 
+
+Locator = namedtuple('Locator',['by','value'])
+
+class GetElementsDescriptor:
+
+    def __init__(self,locator,timeout=5, mult_elems= False):
+        self.locator = locator
+        self.timeout = timeout
+        self.mult_elems = mult_elems
     
     def __get__(self,instance,owner_class):
-        return BaseElement(driver=instance.driver, locator= self.locator, timeout=self.timeout)
+        if self.mult_elems is True:
+            return GetElements(driver=instance.driver, locator= self.locator, timeout=self.timeout)
+        return GetElement(driver=instance.driver, locator= self.locator, timeout=self.timeout)
 
 class GooglePage(BasePage):
-    search_textbox = BaseElementDescriptor(Locator(by=By.XPATH,\
+    search_textbox = GetElementsDescriptor(Locator(by=By.XPATH,\
                                                    value ="//input[@name='q']/../input"))
 
-    cookies_btns = BaseElementDescriptor(Locator(by=By.XPATH,\
+    cookies_btns = GetElementsDescriptor(Locator(by=By.XPATH,\
                                                    value ="//div[contains(@class,'QS5gu sy4vM')]"))
-
     def __init__(self,driver):
         super().__init__(driver)
 
-class DummyTestCase:
+class TechStepPage(BasePage):
+    input_1 = GetElementsDescriptor(Locator(by=By.CSS_SELECTOR,\
+                                                   value ="input[id='r1Input']"))
+
+    answer_1 = GetElementsDescriptor(Locator(by=By.CSS_SELECTOR,\
+                                                   value ="button[id='r1Btn']"))
+
+    elems =  GetElementsDescriptor(Locator(by=By.TAG_NAME,\
+                                                   value ="input"),mult_elems=True)   
+    def __init__(self,driver):
+        super().__init__(driver)
+        
+
+class BaseTestCase:
 
     def __init__(self):
         self.google_url = 'https://www.google.com/'
+        self.techstep_url = 'https://techstepacademy.com/trial-of-the-stones'
 
     def LoadDrivers(self):
         options = Options()
         options.add_argument("--start-maximized")
         options.add_experimental_option('detach',False)
-        options.add_argument('--headless')
+        #options.add_argument('--headless')
         self.browser = webdriver.Chrome(options=options)
     
-    def NewGoogleSearch(self):
-        self.home_page = GooglePage(driver=self.browser)
-        self.home_page.GoTo(url=self.google_url)
-        print(self.home_page.cookies_btns)
+    def DummyTechStep(self):
+        self.techstep_page = TechStepPage(driver=self.browser)
+        self.techstep_page.GoTo(url=self.techstep_url)
+        self.techstep_page.input_1.text = 'rock'
+        self.techstep_page.answer_1.Click()
+        for elem in self.techstep_page.elems:
+            print(elem.text)      
 
-        self.home_page.search_textbox = 'Selenium Automation'
+    def NewGoogleSearch(self):
+        self.google_page = GooglePage(driver=self.browser)
+        self.google_page.GoTo(url=self.google_url)
+        self.google_page.search_textbox = 'Selenium Automation'
 
     def __call__(self):       
         self.LoadDrivers()
-        self.NewGoogleSearch()
+        #self.NewGoogleSearch()
+        self.DummyTechStep()
 
-test_obj = DummyTestCase()
-test_obj()
-
+obj = BaseTestCase()
+obj()
