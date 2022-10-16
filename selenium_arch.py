@@ -1,6 +1,8 @@
-from collections import namedtuple
+from collections import namedtuple,defaultdict
 from re import A
-import traceback,sys,time,os,glob,json
+import traceback,sys,time,os,glob,json, requests
+import json
+from jsonschema import validate
 from pathlib import Path
 from email.mime.text import MIMEText
 import selenium
@@ -14,7 +16,12 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.remote.webelement import WebElement
 
 class BasePage:
-    def __init__(self,driver):
+    def __init__(self):
+        options = Options()
+        options.add_argument("--start-maximized")
+        options.add_experimental_option('detach',False)
+        #options.add_argument('--headless')
+        driver = webdriver.Chrome(options=options)
         self.driver = driver
     
     def GoTo(self,url):
@@ -48,8 +55,7 @@ class BaseElement:
             self.web_element.send_keys(Keys.DELETE)
 
     def attribute(self,attr_name):
-        attribute = self.web_element.get_attribute(attr_name)
-        return attribute
+        return self.web_element.get_attribute(attr_name)
     
     def Enter(self):
         self.web_element.send_keys(Keys.ENTER)
@@ -113,8 +119,8 @@ class GooglePage(BasePage):
 
     cookies_btns = GetElementsDescriptor(Locator(by=By.XPATH,\
                                                    value ="//div[contains(@class,'QS5gu sy4vM')]"))
-    def __init__(self,driver):
-        super().__init__(driver)
+    def __init__(self):
+        super().__init__()
 
 class TechStepPage(BasePage):
     input_1 = GetElementsDescriptor(Locator(by=By.CSS_SELECTOR,\
@@ -125,40 +131,34 @@ class TechStepPage(BasePage):
 
     elems =  GetElementsDescriptor(Locator(by=By.TAG_NAME,\
                                                    value ="input"),mult_elems=True)   
-    def __init__(self,driver):
-        super().__init__(driver)
-        
+    def __init__(self):
+        super().__init__() 
 
 class BaseTestCase:
 
     def __init__(self):
         self.google_url = 'https://www.google.com/'
         self.techstep_url = 'https://techstepacademy.com/trial-of-the-stones'
-
-    def LoadDrivers(self):
-        options = Options()
-        options.add_argument("--start-maximized")
-        options.add_experimental_option('detach',False)
-        #options.add_argument('--headless')
-        self.browser = webdriver.Chrome(options=options)
     
     def DummyTechStep(self):
-        self.techstep_page = TechStepPage(driver=self.browser)
+        self.techstep_page = TechStepPage()
         self.techstep_page.GoTo(url=self.techstep_url)
         self.techstep_page.input_1.text = 'rock'
         self.techstep_page.answer_1.Click()
-        for elem in self.techstep_page.elems:
-            print(elem.text)      
+        elem = self.techstep_page.elems[1]
+        print(elem.text)
+        elem.text ='aaa'
+        print(elem.text)
 
     def NewGoogleSearch(self):
-        self.google_page = GooglePage(driver=self.browser)
+        self.google_page = GooglePage()
         self.google_page.GoTo(url=self.google_url)
         self.google_page.search_textbox = 'Selenium Automation'
 
     def __call__(self):       
-        self.LoadDrivers()
         #self.NewGoogleSearch()
         self.DummyTechStep()
 
-obj = BaseTestCase()
-obj()
+# obj = BaseTestCase()
+# obj()
+
