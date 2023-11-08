@@ -1,0 +1,118 @@
+name: Send Slack Message
+
+on:
+  workflow_run:
+    workflows: ["pages-build-deployment"]
+    types:
+      - completed
+  workflow_dispatch:
+
+jobs:
+  send_slack_message:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check workflow conclusion
+        id: check_conclusion
+        run: echo "conclusion=${{ github.event.workflow_run.conclusion }}" >> $GITHUB_OUTPUT
+
+      - name: Find relevant comment and extract test outcome
+        id: find-comment
+        uses: actions/github-script@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // Get the current date
+            const currentDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD format
+            
+            // Get the current hour and the previous hour
+            const currentHour = new Date().getHours().toString().padStart(2, '0'); // 00-23 format
+            const previousHour = (new Date().getHours() - 1).toString().padStart(2, '0'); // 00-23 format for the previous hour
+
+            core.info(`Looking for comments with Date: ${currentDate} ${currentHour}: or ${currentDate} ${previousHour}:`);
+
+            // Fetch all commits for today's date
+            const commits = await github.repos.listCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              since: `${currentDate}T00:00:00Z`,
+              until: `${currentDate}T23:59:59Z`,
+              sort: 'desc'
+            });
+
+            if (!commits.data.length) {
+              core.info('No commits found for the given date range.');
+            }
+
+            // For each commit, check the comments
+            for (const commit of commits.data) {
+              const comments = await github.repos.listCommentsForCommit({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                commit_sha: commit.sha
+              });
+
+              // Search for the comment that matches our criteria
+              const relevantComment = comments.data.find(comment => {
+                return comment.body.includes(`Date: ${currentDate} ${currentHour}:`) || 
+                       comment.body.includes(`Date: ${currentDate} ${previousHour}:`);
+              });
+
+              if (relevantComment) {
+                core.info(`Found a relevant comment in commit ${commit.sha}`);
+                const outcomeMatch = relevantComment.body.match(/Test Outcome: (\w+)/);
+                if (outcomeMatch && outcomeMatch[1]) {
+                  core.info(`Test Outcome: ${outcomeMatch[1]}`);
+                  // Setting the outputs
+                  core.setOutput("commit_sha", commit.sha);
+                  core.setOutput("test_outcome", outcomeMatch[1]);
+
+                  return;  // Exit the script successfully as we found the comment
+                }
+              }
+            }
+
+            // If no comment found, raise an error
+            core.error("No matching comment found for the specified date and hour.");
+            throw new Error("No matching comment found for the specified date and hour.");
+
+      - name: Display the commit SHA
+        run: echo "The commit SHA where the message was found is ${{ steps.find-comment.outputs.commit_sha }}"
+
+      - name: Display the test outcome
+        run: echo "The test outcome is ${{ steps.find-comment.outputs.test_outcome }}"
+        
+      #<@U055HCVJC6Q> -Member id for Giorgos Gkiokas (got it from Slack app)
+      #<!subteam^S05J3U2T4N5> - Nightwatch id (got it from step Fetch Slack User Groups down in the commented part)
+      - name: Determine Slack message
+        id: determine_message
+        run: |
+          if [[ "${{ steps.check_conclusion.outputs.conclusion }}" == "success" ]]; then
+            if [[ "${{ steps.find-comment.outputs.test_outcome }}" == "pass" ]]; then
+              echo "message= Tests Passed. Report: https://seafair.github.io/poseidon" >> $GITHUB_OUTPUT 
+            elif [[ "${{ steps.find-comment.outputs.test_outcome }}" == "fail" ]]; then
+              echo "message= Tests Failed. Report: https://seafair.github.io/poseidon" >> $GITHUB_OUTPUT 
+            fi
+          else
+            echo "message=<@U055HCVJC6Q> Workflow Failed: Please check the logs for more details." >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post to a Slack channel
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          channel-id: C060F2B1SH5 # # engineering-alerts C0187T8AX42
+          slack-message: "${{ steps.determine_message.outputs.message }}"
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}  # This is where token exists https://api.slack.com/apps/A05EE1EU6L8/oauth?
+
+
+      # C060F2B1SH5
+      # - name: Fetch Slack User Groups
+      #   run: |
+      #     response=$(curl -X GET "https://slack.com/api/usergroups.list" \
+      #       -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
+      #       -H "Content-type: application/x-www-form-urlencoded")
+      #     echo "$response" | jq .  # pretty-print the JSON response using jq
+      #   env:
+      #     SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+
+# deprecation for actions/github-script@v4

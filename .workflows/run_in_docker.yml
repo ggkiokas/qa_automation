@@ -1,0 +1,215 @@
+name: Run Tests in Docker
+
+on:
+  schedule:
+    - cron: '30 0,6,12,18 * * *'
+  workflow_dispatch:
+
+jobs:
+  run_tests:
+    environment: staging
+    outputs:
+      tests-result: ${{ steps.set-result.outputs.tests-result }}
+    
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        test-suites:
+          - 'backend/behave/sf_app'
+          - 'frontend/selenium_wd/behave/sf_app/login.feature'
+          - 'frontend/selenium_wd/behave/sf_app/signup.feature'
+          - 'frontend/selenium_wd/behave/cm_app/register_seafarer.feature'
+          - 'frontend/selenium_wd/behave/cm_app/reset_password.feature'
+          - 'frontend/selenium_wd/behave/cm_app/create_contract.feature'
+          - 'frontend/selenium_wd/behave/cm_app/sign_seafarer_on_off.feature'
+          - 'frontend/selenium_wd/behave/cm_app/upload_certificate.feature'
+          - 'frontend/selenium_wd/behave/cm_app/export_crew_list.feature'
+
+    env:
+      BROWSER: ${{ vars.BROWSER }}
+      BROWSER_VERSION: ${{ vars.BROWSER_VERSION }}
+      CM_EMAIL: ${{ vars.CM_EMAIL }}
+      DB_USER: ${{ vars.DB_USER }}
+      DEVICE_VIEW: ${{ vars.DEVICE_VIEW }}
+      ENV: ${{ vars.ENV }}
+      MACHINE: ${{ vars.MACHINE }}
+      SF_EMAIL: ${{ vars.SF_EMAIL }}
+      TIMEOUT_UI: ${{ vars.TIMEOUT_UI }}
+
+      CM_PASS: ${{ secrets.CM_PASS }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      GOOGLE_SERVICE_KEY: ${{ secrets.GOOGLE_SERVICE_KEY }}
+      SF_PASS: ${{ secrets.SF_PASS }}
+
+    steps:
+      - name: Connect to Database
+        uses: mattes/gce-cloudsql-proxy-action@v1
+        with:
+          creds: ${{ secrets.TMP }}
+          instance: calypso-staging-werc:europe-west3:calypso-staging-2fvg
+          port: 5430
+
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Replace directory name
+        id: replace_dir_name
+        run: |
+          allure_results_dir="allure_result_${{ matrix.test-suites }}"
+          allure_results_dir="${allure_results_dir////_}"
+          allure_results_dir="${allure_results_dir//./_}"
+          echo "RESULTS_PATH=$allure_results_dir" >> $GITHUB_OUTPUT
+
+      - name: Cache Docker images
+        id: cache
+        uses: actions/cache@v3
+        with:
+          path: /tmp/docker-images
+          key: docker-image-${{ hashFiles('Dockerfile') }}-${{ hashFiles('requirements.txt') }}
+
+      - name: Load cached Docker image
+        run: docker load -i /tmp/docker-images/image.tar || true
+
+      - name: Pull Docker image
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: docker pull gigkiokas/qa_repo:v2
+
+      - name: Save Docker image
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p /tmp/docker-images
+          docker save -o /tmp/docker-images/image.tar gigkiokas/qa_repo:v2
+
+      - name: Run tests with docker-compose
+        id: run-tests
+        continue-on-error: true
+        env:          
+          RETRIES_NUM: 3
+          TEST_SUITE: ${{ matrix.test-suites }}
+          RESULTS_PATH: ${{ steps.replace_dir_name.outputs.RESULTS_PATH }}
+        run: |
+              docker-compose -f docker-compose.yml up --exit-code-from test        
+
+      - name: Output test result
+        id: set-result
+        if: steps.run-tests.outcome == 'failure'
+        run: echo "tests-result=fail" >> $GITHUB_OUTPUT
+
+      - name: Upload Screenshots (if Selenium tests failed) 
+        if: steps.run-tests.outcome == 'failure'
+        uses: actions/upload-artifact@v3
+        with:
+          name: failed-test-screenshots
+          path: screenshots/
+
+      - name: Prepare Allure history
+        run: |
+          mkdir -p allure-results
+          sudo mv ${{ steps.replace_dir_name.outputs.RESULTS_PATH }}/* allure-results
+          ls allure-results
+
+      - name: Upload Allure results artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: allure-results-art
+          path: allure-results
+
+      - name: Check if detailed_log.log exists
+        id: check-log-file
+        run: |
+          if [[ -f detailed_log.log ]]; then
+            echo "log-exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "log-exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload detailed logs
+        if: steps.check-log-file.outputs.exists == 'true'
+        uses: actions/upload-artifact@v2
+        with:
+          name: detailed_logs
+          path: detailed_log.log
+
+
+  serve_allure_report:
+    needs: run_tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # for checking out code
+      # pull-requests: write  
+      # issues: write 
+      # repository-projects: write  
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Create an empty test commit
+        run: |
+          git config --global user.name 'ggkiokas'
+          git config --global user.email 'georgegkiokas92@gmail.com'
+          git pull origin main
+          echo "This is a dummy file for test purposes. Generated on $(date)" > dummy_file.txt
+          git add dummy_file.txt
+          git commit -am "Create a test commit"
+          git push origin main
+
+      - name: Determine Test Result
+        id: check-test-result
+        run: |
+          TEST_RESULT="${{ needs.run_tests.outputs.tests-result }}"
+          if [[ -z "$TEST_RESULT" ]] || [[ "$TEST_RESULT" != "fail" ]]; then
+            echo "TEST_OUTCOME=pass" >> $GITHUB_ENV
+          else
+            echo "TEST_OUTCOME=fail" >> $GITHUB_ENV
+          fi
+
+      - name: Post Test Result as Commit Comment
+        uses: actions/github-script@v4
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            const date = new Date().toISOString();
+            const formattedDate = date.slice(0, 10) + ' ' + date.slice(11, 16); // YYYY-MM-DD HH:MM
+            const result = process.env.TEST_OUTCOME;  // Use the environment variable here
+            await github.repos.createCommitComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+              body: `<!-- TESTS-RESULT -->\nTest Outcome: ${result}\nDate: ${formattedDate}\n<!-- /TESTS-RESULT -->`
+            });
+
+      - name: Download Allure results artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: allure-results-art
+          path: allure-results
+
+      - name: Get Allure history
+        uses: actions/checkout@v3
+        if: always()
+        continue-on-error: true
+        with:
+          ref: gh-pages
+          path: gh-pages
+
+      - name: Allure report action
+        uses: simple-elf/allure-report-action@master
+        if: always()
+        with:
+          allure_results: allure-results
+          allure_history: allure-history
+          # keep_reports: 5
+
+      - name: Deploy Allure report to GitHub Pages
+        id: gh-pages
+        if: always()
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: allure-history
+
+
+# replace secrets.TMP that is the json of calypso-staging with a name like secrets.DB_AUTH
+
